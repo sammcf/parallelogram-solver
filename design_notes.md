@@ -191,3 +191,30 @@ The 12.25-inch base accounts for the piston rod, seals, and end caps. This is an
 When enabled, an exponential decay `0.3^|distance|` penalises solutions that select strokes far from the user's preferred size. One step away (e.g., preferring 12" but getting 16") reduces fitness to 30%. Two steps away reduces to 9%. This strongly converges the GA toward the preferred stroke while still allowing it to explore adjacent sizes if the geometry demands it.
 
 The preference is optional — disabling it lets the GA find the globally optimal stroke size regardless of user preference.
+
+## 9. Future Work
+
+### 9.1. Extract Shared Domain Layer
+
+Genome layout, lug parameterisation, and decode logic are duplicated between `optimizer.py` (GA encode/decode) and `app.py` (widget ↔ genome mapping in `_apply_solution` + lug config sections). Adding or reordering a gene requires updating hard-coded indices in both files — a fragile arrangement that has already caused bugs.
+
+Extract into a shared module (e.g. `genome.py` or `params.py`) that defines: gene indices, gene space ranges, encode/decode functions for lug params, and topology-to-member mappings. Both frontend and solver import from this single source of truth.
+
+### 9.2. Effector Path Conditioning
+
+For a perfect parallelogram (`L_L == L_U`, `H_f == H_e`), the effector endpoint traces a pure vertical line. Modified linkages — where arm lengths or frame dimensions differ — produce a non-linear arc instead. Currently the solver is agnostic to the shape of this arc; it only cares about total vertical travel.
+
+Adding path-shape parameters would let users condition the GA on the effector's trajectory for a given geometry package:
+- **Max lateral deviation**: constrain how far the effector wanders horizontally from a vertical line (e.g. "must stay within ±15mm of vertical over the full stroke").
+- **Arc radius bounds**: set minimum/maximum curvature of the path, useful when the effector must track along or clear a particular surface.
+- **Target path profile**: supply an explicit path (series of x,y points or a parametric curve) and penalise deviation from it, for cases where the effector must follow a specific trajectory (e.g. matching an existing guide rail or mating geometry).
+
+This would be implemented as additional soft fitness modifiers — evaluate the effector path at each step of the kinematic sweep, compute the relevant deviation metric, and apply a `1/(1+x)` style penalty. The user-facing controls would be optional toggles with threshold inputs, similar to the existing clearance and stroke preference controls.
+
+### 9.3. Performance Optimisation Pass
+
+The current implementation prioritises correctness and readability. A dedicated performance pass should target:
+- **Fitness evaluation hot path**: `evaluate()` is called `sol_per_pop × num_generations` times (~200 × 300 = 60k). Profiling to identify bottlenecks (likely `analyze_range` and trigonometric calls) and vectorising where possible with NumPy would reduce wall-clock time significantly.
+- **Batch kinematics**: `analyze_range` evaluates positions in a Python loop. Rewriting the inner loop as vectorised NumPy operations (or a small Cython/Numba kernel) would be the single biggest win.
+- **Caching**: repeated evaluation of the same or similar genomes (especially elites carried across generations) could benefit from memoisation, though the cache key design needs care given floating-point genes.
+- **Streamlit rendering**: the matplotlib plot is regenerated from scratch on every parameter change. Investigate whether partial updates or a lighter plotting backend (e.g. Plotly with WebGL) would improve UI responsiveness for interactive tweaking.
