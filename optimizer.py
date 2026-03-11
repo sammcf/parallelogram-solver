@@ -12,7 +12,9 @@ class CylinderCatalogue:
         return min_l, max_l, S
 
 class FitnessEvaluator:
-    def __init__(self, target_travel, load_kg, cyl_params, symmetrical_lugs=False, arm_width=100.0, cyl_env=152.4, use_clearance=True):
+    STROKE_DECAY = 0.3  # per catalogue step from preferred
+
+    def __init__(self, target_travel, load_kg, cyl_params, symmetrical_lugs=False, arm_width=100.0, cyl_env=152.4, use_clearance=True, preferred_stroke_idx=None):
         self.target_travel = target_travel
         self.load_kg = load_kg
         self.cyl_diam_in = cyl_params['cyl_diam_in']
@@ -23,6 +25,7 @@ class FitnessEvaluator:
         self.arm_width = arm_width
         self.cyl_env = cyl_env
         self.use_clearance = use_clearance
+        self.preferred_stroke_idx = preferred_stroke_idx
         
         final_pressure_psi = self.nom_press_psi * (1.0 - self.losses) * (1.0 - self.line_fric)
         piston_area_in2 = np.pi * (self.cyl_diam_in / 2.0)**2
@@ -68,16 +71,18 @@ class FitnessEvaluator:
             if min(np.min(dist_L), np.min(dist_U)) < req_d:
                 return 0.0001
 
-        # Base fitness: closeness to target travel
+        # Hard constraint: cylinder must stay within physical spec
+        l_min, l_max = np.min(results['l_cyl']), np.max(results['l_cyl'])
+        if l_min < min_spec or l_max > max_spec:
+            return 0.0001
+
+        # Base fitness: closeness to target travel (±50mm dead zone)
         actual_travel = results['y_effector'][-1] - results['y_effector'][0]
-        travel_fit = 2000.0 / (1.0 + abs(actual_travel - self.target_travel))
+        travel_err = max(0, abs(actual_travel - self.target_travel) - 50.0)
+        travel_fit = 2000.0 / (1.0 + travel_err)
 
         # Soft modifiers: smooth 0-to-1 gradients the GA can follow
         kin_mod = results['valid_fraction']
-
-        l_min, l_max = np.min(results['l_cyl']), np.max(results['l_cyl'])
-        cyl_excess = max(0, min_spec - l_min) + max(0, l_max - max_spec)
-        cyl_mod = 1.0 / (1.0 + cyl_excess / 100.0)
 
         peak_f = np.max(((self.load_kg * 9.81) * results['mech_ratio']) / (1000 * 9.81))
         force_excess = max(0, peak_f - self.cyl_capacity_tonnes)
@@ -88,11 +93,15 @@ class FitnessEvaluator:
 
         parallel_mod = 1.0 / (1.0 + (abs(L_L - L_U) + abs(H_f - H_e)) / 200.0)
 
-        return max(0.0001, travel_fit * kin_mod * cyl_mod * force_mod * ratio_mod * parallel_mod)
+        stroke_mod = 1.0
+        if self.preferred_stroke_idx is not None:
+            stroke_mod = self.STROKE_DECAY ** abs(s_idx - self.preferred_stroke_idx)
+
+        return max(0.0001, travel_fit * kin_mod * force_mod * ratio_mod * parallel_mod * stroke_mod)
 
 class GAOptimizer:
-    def __init__(self, target_travel, load_kg, cyl_params, fixed_params=None, allowed_topologies=None, symmetrical_lugs=False, arm_width=100.0, cyl_env=152.4, use_clearance=True):
-        self.evaluator = FitnessEvaluator(target_travel, load_kg, cyl_params, symmetrical_lugs, arm_width, cyl_env, use_clearance)
+    def __init__(self, target_travel, load_kg, cyl_params, fixed_params=None, allowed_topologies=None, symmetrical_lugs=False, arm_width=100.0, cyl_env=152.4, use_clearance=True, preferred_stroke_idx=None):
+        self.evaluator = FitnessEvaluator(target_travel, load_kg, cyl_params, symmetrical_lugs, arm_width, cyl_env, use_clearance, preferred_stroke_idx)
         self.fixed_params, self.allowed_topos = fixed_params or {}, allowed_topologies or [0, 1, 2]
         
     def fitness_func(self, ga, sol, idx): return self.evaluator.evaluate(sol)
@@ -105,15 +114,19 @@ class GAOptimizer:
         for i, name in enumerate(param_map):
             if name in self.fixed_params: gene_space[i] = [int(self.fixed_params[name])]
         
-        ga = pygad.GA(num_generations=gens, num_parents_mating=25, fitness_func=self.fitness_func, sol_per_pop=200, num_genes=len(gene_space), gene_space=gene_space, parent_selection_type="sss", keep_parents=10, crossover_type="single_point", mutation_type="random", mutation_percent_genes=20, gene_type=int)
+        ga = pygad.GA(num_generations=gens, num_parents_mating=25, fitness_func=self.fitness_func, sol_per_pop=200, num_genes=len(gene_space), gene_space=gene_space, parent_selection_type="sss", keep_parents=0, keep_elitism=10, crossover_type="single_point", mutation_type="random", mutation_percent_genes=20, gene_type=int)
         ga.run()
         
         sorted_idx = np.argsort(ga.last_generation_fitness)[::-1]
         unique, seen = [], []
         for idx in sorted_idx:
             sol = ga.population[idx]
+            # Re-evaluate to catch any stale fitness values
+            fresh_fit = self.evaluator.evaluate(sol)
+            if fresh_fit <= 0.0001:
+                continue
             if not any(np.linalg.norm(sol - s) < 150 for s in seen):
-                unique.append((sol, ga.last_generation_fitness[idx]))
+                unique.append((sol, fresh_fit))
                 seen.append(sol)
             if len(unique) >= 5: break
         return unique
