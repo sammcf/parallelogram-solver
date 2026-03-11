@@ -1,0 +1,4 @@
+streamlit>=1.55
+numpy>=2.4
+matplotlib>=3.10
+pygad>=3.5
