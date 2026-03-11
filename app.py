@@ -144,6 +144,39 @@ with st.sidebar:
             st.session_state.top_solutions = opt.run(gens=generations)
 
 # ── GA Results ────────────────────────────────────────────────────────────────
+def _apply_solution(i):
+    """Push GA solution values into all config widget session state keys."""
+    st.session_state.selected_idx = i
+    sol = st.session_state.top_solutions[i][0]
+    topo = int(sol[5])
+    pairs = {
+        'cfg_LL': int(sol[0]), 'cfg_LU': int(sol[1]),
+        'cfg_Hf': int(sol[2]), 'cfg_He': int(sol[3]), 'cfg_dxf': int(sol[4]),
+    }
+    for key, val in pairs.items():
+        st.session_state[f"{key}_s"] = val
+        st.session_state[f"{key}_n"] = val
+    st.session_state['cfg_topo'] = topo
+    st.session_state['cfg_stroke'] = int(sol[10])
+    # Lug values — decode genome percentages to widget values
+    if topo == 0:
+        lug_pairs = {
+            'l1u': int(sol[6] / 10),
+            'l1v': int(((sol[7] / 1000.0) * 600) - 300),
+            'l2u': int(sol[8] / 10),
+            'l2v': int(((sol[9] / 1000.0) * 600) - 300),
+        }
+    else:
+        lug_pairs = {
+            'flx': int(((sol[6] / 1000.0) * 1500) - 750),
+            'fly': int(((sol[7] / 1000.0) * 1500) - 750),
+            'alu': int(sol[8] / 10),
+            'alv': int(((sol[9] / 1000.0) * 600) - 300),
+        }
+    for key, val in lug_pairs.items():
+        st.session_state[f"{key}_s"] = val
+        st.session_state[f"{key}_n"] = val
+
 if 'top_solutions' in st.session_state:
     st.markdown("## Solutions")
     if not st.session_state.top_solutions:
@@ -153,8 +186,7 @@ if 'top_solutions' in st.session_state:
         for i, (sol, fit) in enumerate(st.session_state.top_solutions):
             _, _, _, _, _, _, _, s_idx = FitnessEvaluator(target_travel, load_kg, cyl_params).decode_genome(sol)
             stroke_in = CylinderCatalogue.STROKES_IN[s_idx]
-            if cols_top[i].button(f"#{i+1}  fit {int(fit)}  {stroke_in}in", key=f"sol_{i}", use_container_width=True):
-                st.session_state.selected_idx = i
+            cols_top[i].button(f"#{i+1}  fit {int(fit)}  {stroke_in}in", key=f"sol_{i}", use_container_width=True, on_click=_apply_solution, args=(i,))
 
 # ── Linkage Configuration ─────────────────────────────────────────────────────
 st.markdown("## Configuration")
