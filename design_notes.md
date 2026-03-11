@@ -213,8 +213,12 @@ This would be implemented as additional soft fitness modifiers — evaluate the 
 
 ### 9.3. Performance Optimisation Pass
 
-The current implementation prioritises correctness and readability. A dedicated performance pass should target:
-- **Fitness evaluation hot path**: `evaluate()` is called `sol_per_pop × num_generations` times (~200 × 300 = 60k). Profiling to identify bottlenecks (likely `analyze_range` and trigonometric calls) and vectorising where possible with NumPy would reduce wall-clock time significantly.
-- **Batch kinematics**: `analyze_range` evaluates positions in a Python loop. Rewriting the inner loop as vectorised NumPy operations (or a small Cython/Numba kernel) would be the single biggest win.
-- **Caching**: repeated evaluation of the same or similar genomes (especially elites carried across generations) could benefit from memoisation, though the cache key design needs care given floating-point genes.
-- **Streamlit rendering**: the matplotlib plot is regenerated from scratch on every parameter change. Investigate whether partial updates or a lighter plotting backend (e.g. Plotly with WebGL) would improve UI responsiveness for interactive tweaking.
+The current implementation prioritises correctness and readability. Stay in Python; target hot-path improvements:
+- **Vectorise `analyze_range`**: the inner kinematic loop is pure Python. Rewriting as vectorised NumPy (compute all angles/positions as arrays in one pass) would be the single biggest win — this is called ~60k times per optimisation run.
+- **Batch fitness evaluation**: evaluate the entire population's fitness in one vectorised call rather than looping per-genome. NumPy broadcasting over the population axis where possible.
+- **Integer-only genome**: all gene values can be integers (mm precision is sufficient for this domain). This simplifies memoisation — genome tuples are directly hashable with no float-rounding ambiguity — and eliminates floating-point reproducibility issues in crossover/mutation.
+- **Memoisation**: elites are re-evaluated each generation. With integer genomes, cache fitness by genome tuple directly. `functools.lru_cache` or a simple dict.
+- **Numba JIT**: if vectorisation alone isn't enough, `@numba.njit` on the inner kinematics loop avoids the Cython build step while getting near-C speed. NumPy-style code JITs cleanly.
+- **Streamlit rendering**: the matplotlib plot regenerates from scratch on every parameter change. Investigate partial updates or a lighter backend (e.g. Plotly with WebGL) for interactive tweaking.
+
+A Haskell rewrite was considered and is architecturally viable (the fitness pipeline and genome ADTs are a natural fit), but the ecosystem overhead isn't justified while the Python version is functional. Revisit if performance becomes a blocking constraint or if the project scope grows significantly.
