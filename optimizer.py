@@ -37,7 +37,7 @@ class FitnessEvaluator:
         Lug u/v are in endpoint-local coords: u = distance from arm endpoint
         (P3/P4) back along the arm, v = perpendicular offset.
         """
-        (L_L, L_U, H_f, H_e, dx_f, topo, l1u_p, l1v_p, l2u_p, l2v_p, s_idx) = genome
+        (L_L, L_U, H_f, H_e, dx_f, dy_f, topo, l1u_p, l1v_p, l2u_p, l2v_p, s_idx) = genome
         frac1 = l1u_p / 1000.0
         u1 = frac1 * L_L
         v1 = ((l1v_p / 1000.0) * 600.0) - 300.0
@@ -51,11 +51,11 @@ class FitnessEvaluator:
             l1, l2 = ('F', ((l1u_p/1000.0)*1500)-750, ((l1v_p/1000.0)*1500)-750), ('L', (l2u_p/1000.0)*L_L, ((l2v_p/1000.0)*600)-300)
         else:
             l1, l2 = ('F', ((l1u_p/1000.0)*1500)-750, ((l1v_p/1000.0)*1500)-750), ('U', (l2u_p/1000.0)*L_U, ((l2v_p/1000.0)*600)-300)
-        return L_L, L_U, H_f, H_e, dx_f, l1, l2, int(s_idx)
+        return L_L, L_U, H_f, H_e, dx_f, dy_f, l1, l2, int(s_idx)
 
     def evaluate(self, genome):
-        L_L, L_U, H_f, H_e, dx_f, lug1, lug2, s_idx = self.decode_genome(genome)
-        linkage = FourBarLinkage(L_L, L_U, H_f, H_e, dx_f)
+        L_L, L_U, H_f, H_e, dx_f, dy_f, lug1, lug2, s_idx = self.decode_genome(genome)
+        linkage = FourBarLinkage(L_L, L_U, H_f, H_e, dx_f, dy_f)
         min_spec, max_spec, _ = CylinderCatalogue.get_specs(s_idx)
 
         # Dynamic kinematic sweep: anchor top at +20°, compute start from target travel
@@ -135,9 +135,9 @@ class GAOptimizer:
 
     def run(self, gens=100):
         gene_space = [{'low': 400, 'high': 1500}, {'low': 400, 'high': 1500}, {'low': 200, 'high': 600}, {'low': 200, 'high': 600},
-                      {'low': -200, 'high': 200}, self.allowed_topos, {'low': 0, 'high': 1000}, {'low': 0, 'high': 1000},
+                      {'low': -200, 'high': 200}, {'low': -200, 'high': 200}, self.allowed_topos, {'low': 0, 'high': 1000}, {'low': 0, 'high': 1000},
                       {'low': 0, 'high': 1000}, {'low': 0, 'high': 1000}, list(range(len(CylinderCatalogue.STROKES_IN)))]
-        param_map = ['L_L', 'L_U', 'H_f', 'H_e', 'dx_f', 'topo', 'l1u_pct', 'l1v_pct', 'l2u_pct', 'l2v_pct', 'stroke_idx']
+        param_map = ['L_L', 'L_U', 'H_f', 'H_e', 'dx_f', 'dy_f', 'topo', 'l1u_pct', 'l1v_pct', 'l2u_pct', 'l2v_pct', 'stroke_idx']
         for i, name in enumerate(param_map):
             if name in self.fixed_params: gene_space[i] = [int(self.fixed_params[name])]
 

@@ -53,15 +53,16 @@ def segment_distance(p1, p2, p3, p4):
     return np.sqrt(np.sum(dP*dP, axis=0))
 
 class FourBarLinkage:
-    def __init__(self, L_L, L_U, H_f, H_e, dx_f=0.0):
+    def __init__(self, L_L, L_U, H_f, H_e, dx_f=0.0, dy_f=0.0):
         self.L_L = L_L
         self.L_U = L_U
         self.H_f = H_f
         self.H_e = H_e
         self.dx_f = dx_f
-        
+        self.dy_f = dy_f
+
         self.P1 = np.array([0.0, 0.0]) # Lower Frame Pivot
-        self.P2 = np.array([dx_f, H_f]) # Upper Frame Pivot
+        self.P2 = np.array([dx_f, H_f + dy_f]) # Upper Frame Pivot
 
     def solve_positions(self, theta_rad):
         """

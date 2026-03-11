@@ -196,6 +196,7 @@ with st.sidebar:
     lockable("H Frame", "H_f", 350, 50, 1000)
     lockable("H Effector", "H_e", 350, 50, 1000)
     lockable("dx Frame", "dx_f", 0, -500, 500)
+    lockable("dy Frame", "dy_f", 0, -500, 500)
 
     st.header("Topology")
     allowed_topos = [
@@ -241,33 +242,34 @@ def _apply_solution(i):
     """Push GA solution values into all config widget session state keys."""
     st.session_state.selected_idx = i
     sol = st.session_state.top_solutions[i][0]
-    topo = int(sol[5])
+    topo = int(sol[6])
     pairs = {
         "cfg_LL": int(sol[0]),
         "cfg_LU": int(sol[1]),
         "cfg_Hf": int(sol[2]),
         "cfg_He": int(sol[3]),
         "cfg_dxf": int(sol[4]),
+        "cfg_dyf": int(sol[5]),
     }
     for key, val in pairs.items():
         st.session_state[f"{key}_s"] = val
         st.session_state[f"{key}_n"] = val
     st.session_state["cfg_topo"] = topo
-    st.session_state["cfg_stroke"] = int(sol[10])
+    st.session_state["cfg_stroke"] = int(sol[11])
     # Lug values — decode genome percentages to widget values
     if topo == 0:
         lug_pairs = {
-            "l1u": int(sol[6] / 10),
-            "l1v": int(((sol[7] / 1000.0) * 600) - 300),
-            "l2u": int(sol[8] / 10),
-            "l2v": int(((sol[9] / 1000.0) * 600) - 300),
+            "l1u": int(sol[7] / 10),
+            "l1v": int(((sol[8] / 1000.0) * 600) - 300),
+            "l2u": int(sol[9] / 10),
+            "l2v": int(((sol[10] / 1000.0) * 600) - 300),
         }
     else:
         lug_pairs = {
-            "flx": int(((sol[6] / 1000.0) * 1500) - 750),
-            "fly": int(((sol[7] / 1000.0) * 1500) - 750),
-            "alu": int(sol[8] / 10),
-            "alv": int(((sol[9] / 1000.0) * 600) - 300),
+            "flx": int(((sol[7] / 1000.0) * 1500) - 750),
+            "fly": int(((sol[8] / 1000.0) * 1500) - 750),
+            "alu": int(sol[9] / 10),
+            "alv": int(((sol[10] / 1000.0) * 600) - 300),
         }
     for key, val in lug_pairs.items():
         st.session_state[f"{key}_s"] = val
@@ -281,7 +283,7 @@ if "top_solutions" in st.session_state:
     else:
         cols_top = st.columns(len(st.session_state.top_solutions))
         for i, (sol, fit) in enumerate(st.session_state.top_solutions):
-            _, _, _, _, _, _, _, s_idx = FitnessEvaluator(
+            _, _, _, _, _, _, _, _, s_idx = FitnessEvaluator(
                 target_travel, load_kg, cyl_params
             ).decode_genome(sol)
             stroke_in = CylinderCatalogue.STROKES_IN[s_idx]
@@ -352,18 +354,26 @@ with c3:
         "cfg_dxf",
         step=10,
     )
+    dy_f = dual_input(
+        "dy Frame (mm)",
+        -500,
+        500,
+        int(sol[5]) if sol is not None else 0,
+        "cfg_dyf",
+        step=10,
+    )
+with c4:
     topo = st.selectbox(
         "Topology",
         list(TOPOLOGY_NAMES.keys()),
-        index=int(sol[5]) if sol is not None else 0,
+        index=int(sol[6]) if sol is not None else 0,
         format_func=lambda x: TOPOLOGY_NAMES[x],
         key="cfg_topo",
     )
-with c4:
     stroke_idx = st.selectbox(
         "Cylinder Stroke",
         range(len(CylinderCatalogue.STROKES_IN)),
-        index=int(sol[10]) if sol is not None else 2,
+        index=int(sol[11]) if sol is not None else 2,
         format_func=lambda x: f"{CylinderCatalogue.STROKES_IN[x]} in",
         key="cfg_stroke",
     )
@@ -374,8 +384,8 @@ cols2 = st.columns(4)
 is_sym = topo == 0 and symmetrical_lugs
 
 if topo == 0:
-    default_u = int(sol[6] / 10) if sol is not None else 20
-    default_v = int(((sol[7] / 1000.0) * 600) - 300) if sol is not None else 150
+    default_u = int(sol[7] / 10) if sol is not None else 20
+    default_v = int(((sol[8] / 1000.0) * 600) - 300) if sol is not None else 150
     with cols2[0]:
         u_pct = dual_input("Lug1 U %", 0, 100, default_u, "l1u") / 100.0
     with cols2[1]:
@@ -387,8 +397,8 @@ if topo == 0:
         with cols2[3]:
             st.markdown(f"**Lug2 V** {-v_val} mm")
     else:
-        default_u2 = int(sol[8] / 10) if sol is not None else 80
-        default_v2 = int(((sol[9] / 1000.0) * 600) - 300) if sol is not None else -150
+        default_u2 = int(sol[9] / 10) if sol is not None else 80
+        default_v2 = int(((sol[10] / 1000.0) * 600) - 300) if sol is not None else -150
         with cols2[2]:
             u2_pct = dual_input("Lug2 U %", 0, 100, default_u2, "l2u") / 100.0
         with cols2[3]:
@@ -396,10 +406,10 @@ if topo == 0:
         u1, v1, u2, v2 = u_pct * L_L, v_val, u2_pct * L_U, v2_val
     lug1, lug2 = ("L", u1, v1), ("U", u2, v2)
 else:
-    default_fx = int(((sol[6] / 1000.0) * 1500) - 750) if sol is not None else 0
-    default_fy = int(((sol[7] / 1000.0) * 1500) - 750) if sol is not None else -200
-    default_u2 = int(sol[8] / 10) if sol is not None else 30
-    default_v2 = int(((sol[9] / 1000.0) * 600) - 300) if sol is not None else 150
+    default_fx = int(((sol[7] / 1000.0) * 1500) - 750) if sol is not None else 0
+    default_fy = int(((sol[8] / 1000.0) * 1500) - 750) if sol is not None else -200
+    default_u2 = int(sol[9] / 10) if sol is not None else 30
+    default_v2 = int(((sol[10] / 1000.0) * 600) - 300) if sol is not None else 150
     with cols2[0]:
         fx = dual_input("Frame Lug X (mm)", -750, 750, default_fx, "flx")
     with cols2[1]:
@@ -414,7 +424,7 @@ else:
     lug2 = (l2_member, u2_pct * l2_arm, v2_val)
 
 # ── Analysis & Plots ──────────────────────────────────────────────────────────
-linkage = FourBarLinkage(L_L, L_U, H_f, H_e, dx_f)
+linkage = FourBarLinkage(L_L, L_U, H_f, H_e, dx_f, dy_f)
 try:
     # 1. Dynamically calculate the required sweep to match the UI's target travel
     theta_end_deg = 20.0
@@ -536,6 +546,34 @@ try:
             markersize=3,
         )
 
+        # Body-frame construction lines: show rigid lug-arm attachment
+        # These triangles rotate with the arm, making congruence visually obvious
+        p3_i = res["P3"][:, idx]
+        p4_i = res["P4"][:, idx]
+        for q, member_type in [(q1, lug1[0]), (q2, lug2[0])]:
+            if member_type == 'L':
+                arm_end = p3_i
+                arm_dir = np.array([np.cos(res["thetas"][idx]),
+                                    np.sin(res["thetas"][idx])])
+            elif member_type == 'U':
+                arm_end = p4_i
+                arm_dir = np.array([np.cos(res["phis"][idx]),
+                                    np.sin(res["phis"][idx])])
+            else:
+                continue
+            offset = q - arm_end
+            along = np.dot(offset, arm_dir)
+            foot = arm_end + along * arm_dir
+            la = max(alpha * 0.8, 0.4)
+            ax1.plot([arm_end[0], foot[0]], [arm_end[1], foot[1]],
+                     ':', color=color, alpha=la, lw=1, zorder=3)
+            ax1.plot([foot[0], q[0]], [foot[1], q[1]],
+                     ':', color=color, alpha=la, lw=1, zorder=3)
+            ax1.plot([arm_end[0], q[0]], [arm_end[1], q[1]],
+                     ':', color=color, alpha=la, lw=1, zorder=3)
+            ax1.plot(foot[0], foot[1], '.', color=color,
+                     alpha=la, markersize=4, zorder=3)
+
     plot_frame(0, "#666", 0.3)
     plot_frame(-1, "#5dade2", 1.0)
     ax1.set_aspect("equal")
@@ -569,11 +607,15 @@ try:
     spec_cls = "m-ok" if in_spec else "m-bad"
     force_cls = "m-ok" if under_cap else "m-bad"
 
+    actual_press = nom_press * (1.0 - losses) * (1.0 - line_fric)
+
     st.markdown(
         f"""<div class="metric-row" style="justify-content:center;">
         <div><span class="m-label">Travel</span><br><span class="m-val">{travel[-1]:.0f} mm</span></div>
         <div><span class="m-label">Peak Force</span><br><span class="m-val {force_cls}">{peak_force:.2f} T</span></div>
         <div><span class="m-label">Capacity</span><br><span class="m-val">{evaluator.cyl_capacity_tonnes:.2f} T</span></div>
+        <div><span class="m-label">Nom. Pressure</span><br><span class="m-val">{nom_press:,} psi</span></div>
+        <div><span class="m-label">Actual Pressure</span><br><span class="m-val">{actual_press:,.0f} psi</span></div>
         <div><span class="m-label">Cyl Range</span><br><span class="m-val {spec_cls}">{cyl_min:.0f}–{cyl_max:.0f} mm</span></div>
         <div><span class="m-label">Spec Window</span><br><span class="m-val">{min_spec:.0f}–{max_spec:.0f} mm</span></div>
         <div><span class="m-label">Stroke Used</span><br><span class="m-val">{cyl_stroke_req:.1f} in</span></div>
