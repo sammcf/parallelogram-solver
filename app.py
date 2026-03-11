@@ -1,15 +1,16 @@
-import streamlit as st
-import numpy as np
-import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import matplotlib.pyplot as plt
+import numpy as np
+import streamlit as st
 from linkage import FourBarLinkage
-from optimizer import GAOptimizer, CylinderCatalogue, FitnessEvaluator
+from optimizer import CylinderCatalogue, FitnessEvaluator, GAOptimizer
 
 st.set_page_config(layout="wide", page_title="Linkage Solver")
 TOPOLOGY_NAMES = {0: "Lower ↔ Upper", 1: "Frame → Lower", 2: "Frame → Upper"}
 
 # ── Custom CSS ────────────────────────────────────────────────────────────────
-st.markdown("""<style>
+st.markdown(
+    """<style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
     /* Wider sidebar — initial width, resizable */
@@ -63,9 +64,12 @@ st.markdown("""<style>
 
     /* Tighter expander */
     .streamlit-expanderHeader { font-size: 0.82rem !important; font-weight: 500 !important; }
-</style>""", unsafe_allow_html=True)
+</style>""",
+    unsafe_allow_html=True,
+)
 
 st.markdown("# Linkage Solver")
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def dual_input(label, min_v, max_v, default, key, step=1, show_label=True):
@@ -74,29 +78,70 @@ def dual_input(label, min_v, max_v, default, key, step=1, show_label=True):
     if sk not in st.session_state and nk not in st.session_state:
         st.session_state[sk] = int(default)
         st.session_state[nk] = int(default)
-    def _on_slider(): st.session_state[nk] = st.session_state[sk]
-    def _on_number(): st.session_state[sk] = st.session_state[nk]
+
+    def _on_slider():
+        st.session_state[nk] = st.session_state[sk]
+
+    def _on_number():
+        st.session_state[sk] = st.session_state[nk]
+
     if show_label:
-        st.markdown(f'<p style="font-size:0.78rem;font-weight:500;color:#aaa;margin:0 0 0.2rem 0">{label}</p>', unsafe_allow_html=True)
+        st.markdown(
+            f'<p style="font-size:0.78rem;font-weight:500;color:#aaa;margin:0 0 0.2rem 0">{label}</p>',
+            unsafe_allow_html=True,
+        )
     c1, c2 = st.columns([3, 1])
-    c1.slider(label, min_value=int(min_v), max_value=int(max_v), step=int(step), key=sk, on_change=_on_slider, label_visibility="collapsed")
-    c2.number_input(label, min_value=int(min_v), max_value=int(max_v), step=int(step), key=nk, on_change=_on_number, label_visibility="collapsed")
+    c1.slider(
+        label,
+        min_value=int(min_v),
+        max_value=int(max_v),
+        step=int(step),
+        key=sk,
+        on_change=_on_slider,
+        label_visibility="collapsed",
+    )
+    c2.number_input(
+        label,
+        min_value=int(min_v),
+        max_value=int(max_v),
+        step=int(step),
+        key=nk,
+        on_change=_on_number,
+        label_visibility="collapsed",
+    )
     return int(st.session_state[sk])
+
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("Design Targets")
-    target_travel = dual_input("Target Travel (mm)", 100, 5000, 1000, "target_travel", step=50)
+    target_travel = dual_input(
+        "Target Travel (mm)", 100, 5000, 1000, "target_travel", step=50
+    )
     load_kg = dual_input("Load (kg)", 100, 200000, 10000, "load_kg", step=500)
 
     st.header("Cylinder")
     c1, c2 = st.columns(2)
-    cyl_diam = c1.number_input("Bore (in)", value=5.0, step=0.5, key="cyl_d", min_value=1.0, max_value=20.0)
-    nom_press = c2.number_input("Pressure (psi)", value=2500, step=100, key="cyl_p", min_value=500, max_value=10000)
+    cyl_diam = c1.number_input(
+        "Bore (in)", value=5.0, step=0.5, key="cyl_d", min_value=1.0, max_value=20.0
+    )
+    nom_press = c2.number_input(
+        "Pressure (psi)",
+        value=2500,
+        step=100,
+        key="cyl_p",
+        min_value=500,
+        max_value=10000,
+    )
     c3, c4 = st.columns(2)
     losses = c3.slider("Losses", 0.0, 0.5, 0.01, key="losses")
     line_fric = c4.slider("Line Friction", 0.0, 0.5, 0.15, key="fric")
-    cyl_params = {'cyl_diam_in': cyl_diam, 'nom_press_psi': nom_press, 'losses': losses, 'line_fric': line_fric}
+    cyl_params = {
+        "cyl_diam_in": cyl_diam,
+        "nom_press_psi": nom_press,
+        "losses": losses,
+        "line_fric": line_fric,
+    }
 
     st.header("Clearance")
     arm_width = dual_input("Arm Width (mm)", 20, 500, 100, "aw", step=10)
@@ -105,21 +150,47 @@ with st.sidebar:
 
     st.header("Geometry Holds")
     fixed_params = {}
+
     def lockable(label, key, default_val, min_v, max_v, step=10):
         sk, nk = f"geo_{key}_s", f"geo_{key}_n"
         if sk not in st.session_state and nk not in st.session_state:
             st.session_state[sk] = int(default_val)
             st.session_state[nk] = int(default_val)
-        def _on_s(): st.session_state[nk] = st.session_state[sk]
-        def _on_n(): st.session_state[sk] = st.session_state[nk]
-        st.markdown(f'<p style="font-size:0.78rem;font-weight:500;color:#aaa;margin:0 0 0.2rem 0">{label}</p>', unsafe_allow_html=True)
+
+        def _on_s():
+            st.session_state[nk] = st.session_state[sk]
+
+        def _on_n():
+            st.session_state[sk] = st.session_state[nk]
+
+        st.markdown(
+            f'<p style="font-size:0.78rem;font-weight:500;color:#aaa;margin:0 0 0.2rem 0">{label}</p>',
+            unsafe_allow_html=True,
+        )
         c1, c2, c3 = st.columns([5, 2, 1.5])
-        c1.slider(label, min_value=int(min_v), max_value=int(max_v), step=int(step), key=sk, on_change=_on_s, label_visibility="collapsed")
-        c2.number_input(label, min_value=int(min_v), max_value=int(max_v), step=int(step), key=nk, on_change=_on_n, label_visibility="collapsed")
+        c1.slider(
+            label,
+            min_value=int(min_v),
+            max_value=int(max_v),
+            step=int(step),
+            key=sk,
+            on_change=_on_s,
+            label_visibility="collapsed",
+        )
+        c2.number_input(
+            label,
+            min_value=int(min_v),
+            max_value=int(max_v),
+            step=int(step),
+            key=nk,
+            on_change=_on_n,
+            label_visibility="collapsed",
+        )
         val = int(st.session_state[sk])
         if c3.checkbox("Hold", key=f"lock_{key}"):
             fixed_params[key] = val
         return val
+
     lockable("L Lower", "L_L", 800, 200, 2000)
     lockable("L Upper", "L_U", 800, 200, 2000)
     lockable("H Frame", "H_f", 350, 50, 1000)
@@ -127,8 +198,13 @@ with st.sidebar:
     lockable("dx Frame", "dx_f", 0, -500, 500)
 
     st.header("Topology")
-    allowed_topos = [k for k, v in TOPOLOGY_NAMES.items() if st.checkbox(v, value=True, key=f"topo_{k}")]
-    if not allowed_topos: allowed_topos = [0]
+    allowed_topos = [
+        k
+        for k, v in TOPOLOGY_NAMES.items()
+        if st.checkbox(v, value=True, key=f"topo_{k}")
+    ]
+    if not allowed_topos:
+        allowed_topos = [0]
     symmetrical_lugs = st.checkbox("Symmetrical Lugs (LU only)", value=True)
 
     st.header("Optimizer")
@@ -136,12 +212,29 @@ with st.sidebar:
     use_stroke_pref = st.checkbox("Prefer Stroke", value=True)
     preferred_stroke_idx = None
     if use_stroke_pref:
-        preferred_stroke_idx = st.selectbox("Preferred Stroke", range(len(stroke_names)), index=2, format_func=lambda i: stroke_names[i])
+        preferred_stroke_idx = st.selectbox(
+            "Preferred Stroke",
+            range(len(stroke_names)),
+            index=2,
+            format_func=lambda i: stroke_names[i],
+        )
     generations = dual_input("Generations", 10, 1000, 100, "gens", step=10)
     if st.button("Run Optimizer", use_container_width=True, type="primary"):
         with st.spinner("Evolving..."):
-            opt = GAOptimizer(target_travel, load_kg, cyl_params, fixed_params, allowed_topos, symmetrical_lugs, arm_width, cyl_env, use_clearance, preferred_stroke_idx)
+            opt = GAOptimizer(
+                target_travel,
+                load_kg,
+                cyl_params,
+                fixed_params,
+                allowed_topos,
+                symmetrical_lugs,
+                arm_width,
+                cyl_env,
+                use_clearance,
+                preferred_stroke_idx,
+            )
             st.session_state.top_solutions = opt.run(gens=generations)
+
 
 # ── GA Results ────────────────────────────────────────────────────────────────
 def _apply_solution(i):
@@ -150,166 +243,344 @@ def _apply_solution(i):
     sol = st.session_state.top_solutions[i][0]
     topo = int(sol[5])
     pairs = {
-        'cfg_LL': int(sol[0]), 'cfg_LU': int(sol[1]),
-        'cfg_Hf': int(sol[2]), 'cfg_He': int(sol[3]), 'cfg_dxf': int(sol[4]),
+        "cfg_LL": int(sol[0]),
+        "cfg_LU": int(sol[1]),
+        "cfg_Hf": int(sol[2]),
+        "cfg_He": int(sol[3]),
+        "cfg_dxf": int(sol[4]),
     }
     for key, val in pairs.items():
         st.session_state[f"{key}_s"] = val
         st.session_state[f"{key}_n"] = val
-    st.session_state['cfg_topo'] = topo
-    st.session_state['cfg_stroke'] = int(sol[10])
+    st.session_state["cfg_topo"] = topo
+    st.session_state["cfg_stroke"] = int(sol[10])
     # Lug values — decode genome percentages to widget values
     if topo == 0:
         lug_pairs = {
-            'l1u': int(sol[6] / 10),
-            'l1v': int(((sol[7] / 1000.0) * 600) - 300),
-            'l2u': int(sol[8] / 10),
-            'l2v': int(((sol[9] / 1000.0) * 600) - 300),
+            "l1u": int(sol[6] / 10),
+            "l1v": int(((sol[7] / 1000.0) * 600) - 300),
+            "l2u": int(sol[8] / 10),
+            "l2v": int(((sol[9] / 1000.0) * 600) - 300),
         }
     else:
         lug_pairs = {
-            'flx': int(((sol[6] / 1000.0) * 1500) - 750),
-            'fly': int(((sol[7] / 1000.0) * 1500) - 750),
-            'alu': int(sol[8] / 10),
-            'alv': int(((sol[9] / 1000.0) * 600) - 300),
+            "flx": int(((sol[6] / 1000.0) * 1500) - 750),
+            "fly": int(((sol[7] / 1000.0) * 1500) - 750),
+            "alu": int(sol[8] / 10),
+            "alv": int(((sol[9] / 1000.0) * 600) - 300),
         }
     for key, val in lug_pairs.items():
         st.session_state[f"{key}_s"] = val
         st.session_state[f"{key}_n"] = val
 
-if 'top_solutions' in st.session_state:
+
+if "top_solutions" in st.session_state:
     st.markdown("## Solutions")
     if not st.session_state.top_solutions:
         st.warning("No feasible solutions. Relax constraints or increase generations.")
     else:
         cols_top = st.columns(len(st.session_state.top_solutions))
         for i, (sol, fit) in enumerate(st.session_state.top_solutions):
-            _, _, _, _, _, _, _, s_idx = FitnessEvaluator(target_travel, load_kg, cyl_params).decode_genome(sol)
+            _, _, _, _, _, _, _, s_idx = FitnessEvaluator(
+                target_travel, load_kg, cyl_params
+            ).decode_genome(sol)
             stroke_in = CylinderCatalogue.STROKES_IN[s_idx]
-            cols_top[i].button(f"#{i+1}  fit {int(fit)}  {stroke_in}in", key=f"sol_{i}", use_container_width=True, on_click=_apply_solution, args=(i,))
+            cols_top[i].button(
+                f"#{i + 1}  fit {int(fit)}  {stroke_in}in",
+                key=f"sol_{i}",
+                use_container_width=True,
+                on_click=_apply_solution,
+                args=(i,),
+            )
 
 # ── Linkage Configuration ─────────────────────────────────────────────────────
 st.markdown("## Configuration")
 
+
 def _ga_sol():
-    if 'top_solutions' not in st.session_state or not st.session_state.top_solutions:
+    if "top_solutions" not in st.session_state or not st.session_state.top_solutions:
         return None
-    idx = st.session_state.get('selected_idx', 0)
+    idx = st.session_state.get("selected_idx", 0)
     if idx >= len(st.session_state.top_solutions):
         idx = 0
     return st.session_state.top_solutions[idx][0]
+
 
 sol = _ga_sol()
 
 c1, c2, c3, c4 = st.columns(4)
 with c1:
-    L_L = dual_input("L Lower (mm)", 100, 2000, int(sol[0]) if sol is not None else 800, "cfg_LL", step=10)
-    L_U = dual_input("L Upper (mm)", 100, 2000, int(sol[1]) if sol is not None else 800, "cfg_LU", step=10)
+    L_L = dual_input(
+        "L Lower (mm)",
+        100,
+        2000,
+        int(sol[0]) if sol is not None else 800,
+        "cfg_LL",
+        step=10,
+    )
+    L_U = dual_input(
+        "L Upper (mm)",
+        100,
+        2000,
+        int(sol[1]) if sol is not None else 800,
+        "cfg_LU",
+        step=10,
+    )
 with c2:
-    H_f = dual_input("H Frame (mm)", 50, 1000, int(sol[2]) if sol is not None else 350, "cfg_Hf", step=10)
-    H_e = dual_input("H Effector (mm)", 50, 1000, int(sol[3]) if sol is not None else 350, "cfg_He", step=10)
+    H_f = dual_input(
+        "H Frame (mm)",
+        50,
+        1000,
+        int(sol[2]) if sol is not None else 350,
+        "cfg_Hf",
+        step=10,
+    )
+    H_e = dual_input(
+        "H Effector (mm)",
+        50,
+        1000,
+        int(sol[3]) if sol is not None else 350,
+        "cfg_He",
+        step=10,
+    )
 with c3:
-    dx_f = dual_input("dx Frame (mm)", -500, 500, int(sol[4]) if sol is not None else 0, "cfg_dxf", step=10)
-    topo = st.selectbox("Topology", list(TOPOLOGY_NAMES.keys()),
-                        index=int(sol[5]) if sol is not None else 0,
-                        format_func=lambda x: TOPOLOGY_NAMES[x], key="cfg_topo")
+    dx_f = dual_input(
+        "dx Frame (mm)",
+        -500,
+        500,
+        int(sol[4]) if sol is not None else 0,
+        "cfg_dxf",
+        step=10,
+    )
+    topo = st.selectbox(
+        "Topology",
+        list(TOPOLOGY_NAMES.keys()),
+        index=int(sol[5]) if sol is not None else 0,
+        format_func=lambda x: TOPOLOGY_NAMES[x],
+        key="cfg_topo",
+    )
 with c4:
-    stroke_idx = st.selectbox("Cylinder Stroke", range(len(CylinderCatalogue.STROKES_IN)),
-                              index=int(sol[10]) if sol is not None else 2,
-                              format_func=lambda x: f"{CylinderCatalogue.STROKES_IN[x]} in", key="cfg_stroke")
+    stroke_idx = st.selectbox(
+        "Cylinder Stroke",
+        range(len(CylinderCatalogue.STROKES_IN)),
+        index=int(sol[10]) if sol is not None else 2,
+        format_func=lambda x: f"{CylinderCatalogue.STROKES_IN[x]} in",
+        key="cfg_stroke",
+    )
 
 # ── Lug positions ─────────────────────────────────────────────────────────────
 st.markdown("### Lugs")
 cols2 = st.columns(4)
-is_sym = (topo == 0 and symmetrical_lugs)
+is_sym = topo == 0 and symmetrical_lugs
 
 if topo == 0:
     default_u = int(sol[6] / 10) if sol is not None else 20
     default_v = int(((sol[7] / 1000.0) * 600) - 300) if sol is not None else 150
-    with cols2[0]: u_pct = dual_input("Lug1 U %", 0, 100, default_u, "l1u") / 100.0
-    with cols2[1]: v_val = dual_input("Lug1 V (mm)", -300, 300, default_v, "l1v")
+    with cols2[0]:
+        u_pct = dual_input("Lug1 U %", 0, 100, default_u, "l1u") / 100.0
+    with cols2[1]:
+        v_val = dual_input("Lug1 V (mm)", -300, 300, default_v, "l1v")
     if is_sym:
         u1, v1, u2, v2 = u_pct * L_L, v_val, (1 - u_pct) * L_U, -v_val
-        with cols2[2]: st.markdown(f"**Lug2 U** {(1-u_pct)*100:.0f}%")
-        with cols2[3]: st.markdown(f"**Lug2 V** {-v_val} mm")
+        with cols2[2]:
+            st.markdown(f"**Lug2 U** {(1 - u_pct) * 100:.0f}%")
+        with cols2[3]:
+            st.markdown(f"**Lug2 V** {-v_val} mm")
     else:
         default_u2 = int(sol[8] / 10) if sol is not None else 80
         default_v2 = int(((sol[9] / 1000.0) * 600) - 300) if sol is not None else -150
-        with cols2[2]: u2_pct = dual_input("Lug2 U %", 0, 100, default_u2, "l2u") / 100.0
-        with cols2[3]: v2_val = dual_input("Lug2 V (mm)", -300, 300, default_v2, "l2v")
+        with cols2[2]:
+            u2_pct = dual_input("Lug2 U %", 0, 100, default_u2, "l2u") / 100.0
+        with cols2[3]:
+            v2_val = dual_input("Lug2 V (mm)", -300, 300, default_v2, "l2v")
         u1, v1, u2, v2 = u_pct * L_L, v_val, u2_pct * L_U, v2_val
-    lug1, lug2 = ('L', u1, v1), ('U', u2, v2)
+    lug1, lug2 = ("L", u1, v1), ("U", u2, v2)
 else:
     default_fx = int(((sol[6] / 1000.0) * 1500) - 750) if sol is not None else 0
     default_fy = int(((sol[7] / 1000.0) * 1500) - 750) if sol is not None else -200
     default_u2 = int(sol[8] / 10) if sol is not None else 30
     default_v2 = int(((sol[9] / 1000.0) * 600) - 300) if sol is not None else 150
-    with cols2[0]: fx = dual_input("Frame Lug X (mm)", -750, 750, default_fx, "flx")
-    with cols2[1]: fy = dual_input("Frame Lug Y (mm)", -750, 750, default_fy, "fly")
-    with cols2[2]: u2_pct = dual_input("Arm Lug U %", 0, 100, default_u2, "alu") / 100.0
-    with cols2[3]: v2_val = dual_input("Arm Lug V (mm)", -300, 300, default_v2, "alv")
+    with cols2[0]:
+        fx = dual_input("Frame Lug X (mm)", -750, 750, default_fx, "flx")
+    with cols2[1]:
+        fy = dual_input("Frame Lug Y (mm)", -750, 750, default_fy, "fly")
+    with cols2[2]:
+        u2_pct = dual_input("Arm Lug U %", 0, 100, default_u2, "alu") / 100.0
+    with cols2[3]:
+        v2_val = dual_input("Arm Lug V (mm)", -300, 300, default_v2, "alv")
     l2_arm = L_L if topo == 1 else L_U
-    l2_member = 'L' if topo == 1 else 'U'
-    lug1 = ('F', fx, fy)
+    l2_member = "L" if topo == 1 else "U"
+    lug1 = ("F", fx, fy)
     lug2 = (l2_member, u2_pct * l2_arm, v2_val)
 
 # ── Analysis & Plots ──────────────────────────────────────────────────────────
 linkage = FourBarLinkage(L_L, L_U, H_f, H_e, dx_f)
 try:
-    res = linkage.analyze_range(-45, 45, lug1, lug2)
-    evaluator = FitnessEvaluator(target_travel, load_kg, cyl_params, arm_width=arm_width, cyl_env=cyl_env)
-    req_force = ((load_kg * 9.81) * res['mech_ratio']) / (1000 * 9.81)
+    # 1. Dynamically calculate the required sweep to match the UI's target travel
+    theta_end_deg = 20.0
+    theta_end_rad = np.radians(theta_end_deg)
+    sin_start = np.sin(theta_end_rad) - (target_travel / L_L)
+
+    # 2. Safety clamp to prevent the UI from crashing if sliders request impossible geometry
+    sin_start = np.clip(sin_start, -1.0, 1.0)
+    theta_start_deg = np.degrees(np.arcsin(sin_start))
+
+    # 3. Run the analysis over the dynamic range instead of the hardcoded -45 to 45
+    res = linkage.analyze_range(theta_start_deg, theta_end_deg, lug1, lug2)
+
+    evaluator = FitnessEvaluator(
+        target_travel, load_kg, cyl_params, arm_width=arm_width, cyl_env=cyl_env
+    )
+    req_force = ((load_kg * 9.81) * res["mech_ratio"]) / (1000 * 9.81)
     min_spec, max_spec, _ = CylinderCatalogue.get_specs(stroke_idx)
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-    fig.patch.set_facecolor('#0e1117')
+    fig.patch.set_facecolor("#0e1117")
     for ax in (ax1, ax2):
-        ax.set_facecolor('#0e1117')
-        ax.tick_params(colors='#888'); ax.xaxis.label.set_color('#aaa'); ax.yaxis.label.set_color('#aaa')
-        ax.title.set_color('#ddd')
-        for spine in ax.spines.values(): spine.set_color('#333')
+        ax.set_facecolor("#0e1117")
+        ax.tick_params(colors="#888")
+        ax.xaxis.label.set_color("#aaa")
+        ax.yaxis.label.set_color("#aaa")
+        ax.title.set_color("#ddd")
+        for spine in ax.spines.values():
+            spine.set_color("#333")
 
     def plot_frame(idx, color, alpha):
         half_arm = arm_width / 2.0
-        ax1.add_patch(patches.Rectangle((0, -half_arm), L_L, arm_width, angle=np.degrees(res['thetas'][idx]), rotation_point=(0,0), edgecolor=color, facecolor='none', alpha=alpha*0.3, lw=1.5))
-        ax1.add_patch(patches.Rectangle((linkage.P2[0], linkage.P2[1] - half_arm), L_U, arm_width, angle=np.degrees(res['phis'][idx]), rotation_point=(linkage.P2[0], linkage.P2[1]), edgecolor=color, facecolor='none', alpha=alpha*0.3, lw=1.5))
-        q1, q2 = res['Q1'][:, idx], res['Q2'][:, idx]
-        ax1.add_patch(patches.Rectangle((q1[0], q1[1] - cyl_env/2.0), np.linalg.norm(q2-q1), cyl_env, angle=np.degrees(np.arctan2(q2[1]-q1[1], q2[0]-q1[0])), rotation_point=(q1[0], q1[1]), edgecolor='#e74c3c', facecolor='#e74c3c', alpha=alpha*0.1))
-        ax1.plot([0, linkage.P2[0]], [0, linkage.P2[1]], '-o', color='#ccc', alpha=alpha, lw=2, markersize=4)
-        ax1.plot([0, res['P3'][0, idx]], [0, res['P3'][1, idx]], '--', color=color, alpha=alpha, lw=1)
-        ax1.plot([linkage.P2[0], res['P4'][0, idx]], [linkage.P2[1], res['P4'][1, idx]], '--', color=color, alpha=alpha, lw=1)
-        ax1.plot([res['P3'][0, idx], res['P4'][0, idx]], [res['P3'][1, idx], res['P4'][1, idx]], '-o', color='#ccc', alpha=alpha, lw=2.5, markersize=4)
-        ax1.plot([q1[0], q2[0]], [q1[1], q2[1]], '-o', color='#e74c3c', alpha=alpha, lw=2, markersize=3)
-    plot_frame(0, '#666', 0.3); plot_frame(-1, '#5dade2', 1.0)
-    ax1.set_aspect('equal'); ax1.set_title("Linkage Geometry", fontsize=11)
-    ax1.grid(True, alpha=0.1, color='#555')
 
-    travel = res['y_effector'] - res['y_effector'][0]
-    ax2.plot(travel, req_force, color='#5dade2', lw=2, label="Required Force")
-    ax2.axhline(evaluator.cyl_capacity_tonnes, color='#e74c3c', ls='--', lw=1.5, label="Capacity", alpha=0.8)
-    ax2.set_xlabel("Travel (mm)", fontsize=10); ax2.set_ylabel("Force (T)", fontsize=10)
-    ax2.set_ylim(0, min(20000, max(evaluator.cyl_capacity_tonnes * 2, np.max(req_force) * 1.1)))
-    ax2.legend(fontsize=9, facecolor='#0e1117', edgecolor='#333', labelcolor='#aaa')
+        q1, q2 = res["Q1"][:, idx], res["Q2"][:, idx]
+        angle_rad = np.arctan2(q2[1] - q1[1], q2[0] - q1[0])
+        dx_corner = (cyl_env / 2.0) * np.sin(angle_rad)
+        dy_corner = -(cyl_env / 2.0) * np.cos(angle_rad)
+
+        ax1.add_patch(
+            patches.Rectangle(
+                (0, -half_arm),
+                L_L,
+                arm_width,
+                angle=np.degrees(res["thetas"][idx]),
+                rotation_point=(0, 0),
+                edgecolor=color,
+                facecolor="none",
+                alpha=alpha * 0.3,
+                lw=1.5,
+            )
+        )
+        ax1.add_patch(
+            patches.Rectangle(
+                (linkage.P2[0], linkage.P2[1] - half_arm),
+                L_U,
+                arm_width,
+                angle=np.degrees(res["phis"][idx]),
+                rotation_point=(linkage.P2[0], linkage.P2[1]),
+                edgecolor=color,
+                facecolor="none",
+                alpha=alpha * 0.3,
+                lw=1.5,
+            )
+        )
+        ax1.add_patch(
+            patches.Rectangle(
+                (q1[0] + dx_corner, q1[1] + dy_corner),
+                np.linalg.norm(q2 - q1),
+                cyl_env,
+                angle=np.degrees(angle_rad),
+                rotation_point="xy",  # Tells matplotlib to rotate around the corner we just defined
+                edgecolor="#e74c3c",
+                facecolor="#e74c3c",
+                alpha=alpha * 0.1,
+            )
+        )
+
+        ax1.plot(
+            [0, linkage.P2[0]],
+            [0, linkage.P2[1]],
+            "-o",
+            color="#ccc",
+            alpha=alpha,
+            lw=2,
+            markersize=4,
+        )
+        ax1.plot(
+            [0, res["P3"][0, idx]],
+            [0, res["P3"][1, idx]],
+            "--",
+            color=color,
+            alpha=alpha,
+            lw=1,
+        )
+        ax1.plot(
+            [linkage.P2[0], res["P4"][0, idx]],
+            [linkage.P2[1], res["P4"][1, idx]],
+            "--",
+            color=color,
+            alpha=alpha,
+            lw=1,
+        )
+        ax1.plot(
+            [res["P3"][0, idx], res["P4"][0, idx]],
+            [res["P3"][1, idx], res["P4"][1, idx]],
+            "-o",
+            color="#ccc",
+            alpha=alpha,
+            lw=2.5,
+            markersize=4,
+        )
+        ax1.plot(
+            [q1[0], q2[0]],
+            [q1[1], q2[1]],
+            "-o",
+            color="#e74c3c",
+            alpha=alpha,
+            lw=2,
+            markersize=3,
+        )
+
+    plot_frame(0, "#666", 0.3)
+    plot_frame(-1, "#5dade2", 1.0)
+    ax1.set_aspect("equal")
+    ax1.set_title("Linkage Geometry", fontsize=11)
+    ax1.grid(True, alpha=0.1, color="#555")
+
+    travel = res["y_effector"] - res["y_effector"][0]
+    ax2.plot(travel, req_force, color="#5dade2", lw=2, label="Required Force")
+    ax2.axhline(
+        evaluator.cyl_capacity_tonnes,
+        color="#e74c3c",
+        ls="--",
+        lw=1.5,
+        label="Capacity",
+        alpha=0.8,
+    )
+    ax2.set_xlabel("Travel (mm)", fontsize=10)
+    ax2.set_ylabel("Force (T)", fontsize=10)
+    ax2.set_ylim(
+        0, min(20000, max(evaluator.cyl_capacity_tonnes * 2, np.max(req_force) * 1.1))
+    )
+    ax2.legend(fontsize=9, facecolor="#0e1117", edgecolor="#333", labelcolor="#aaa")
     ax2.set_title("Force Profile", fontsize=11)
-    ax2.grid(True, alpha=0.1, color='#555')
+    ax2.grid(True, alpha=0.1, color="#555")
     # Metrics row (above plots)
-    cyl_stroke_req = (np.max(res['l_cyl']) - np.min(res['l_cyl'])) / 25.4
-    cyl_min, cyl_max = np.min(res['l_cyl']), np.max(res['l_cyl'])
+    cyl_stroke_req = (np.max(res["l_cyl"]) - np.min(res["l_cyl"])) / 25.4
+    cyl_min, cyl_max = np.min(res["l_cyl"]), np.max(res["l_cyl"])
     peak_force = np.max(req_force)
     in_spec = cyl_min >= min_spec and cyl_max <= max_spec
     under_cap = peak_force <= evaluator.cyl_capacity_tonnes
     spec_cls = "m-ok" if in_spec else "m-bad"
     force_cls = "m-ok" if under_cap else "m-bad"
 
-    st.markdown(f"""<div class="metric-row" style="justify-content:center;">
+    st.markdown(
+        f"""<div class="metric-row" style="justify-content:center;">
         <div><span class="m-label">Travel</span><br><span class="m-val">{travel[-1]:.0f} mm</span></div>
         <div><span class="m-label">Peak Force</span><br><span class="m-val {force_cls}">{peak_force:.2f} T</span></div>
         <div><span class="m-label">Capacity</span><br><span class="m-val">{evaluator.cyl_capacity_tonnes:.2f} T</span></div>
         <div><span class="m-label">Cyl Range</span><br><span class="m-val {spec_cls}">{cyl_min:.0f}–{cyl_max:.0f} mm</span></div>
         <div><span class="m-label">Spec Window</span><br><span class="m-val">{min_spec:.0f}–{max_spec:.0f} mm</span></div>
         <div><span class="m-label">Stroke Used</span><br><span class="m-val">{cyl_stroke_req:.1f} in</span></div>
-        <div><span class="m-label">Validity</span><br><span class="m-val">{res['valid_fraction']*100:.0f}%</span></div>
-    </div>""", unsafe_allow_html=True)
+        <div><span class="m-label">Validity</span><br><span class="m-val">{res["valid_fraction"] * 100:.0f}%</span></div>
+    </div>""",
+        unsafe_allow_html=True,
+    )
 
     fig.tight_layout(pad=2)
     st.pyplot(fig)

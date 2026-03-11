@@ -1,73 +1,193 @@
-# Parallelogram Linkage Solver: Genetic Algorithm Evolution
+# Parallelogram Linkage Solver: Design Notes
 
-This document records the design decisions and thinking process for evolving the parallelogram linkage solver into a generalized, genetic-algorithm-driven optimization tool.
+This document captures the design intent and decision-making process behind the solver's architecture, fitness landscape, and GA parameter choices.
 
-## 1. Problem Generalization
+## 1. Problem Domain
 
-### 1.1. Geometry: Beyond the True Parallelogram
-The current solver assumes a true parallelogram where:
-- Upper and lower arm lengths are identical ($L$).
-- The vertical distance between frame pivots ($y_f$) equals the distance between end-effector pivots.
+We are optimising the geometry of a four-bar linkage (generalised parallelogram) to achieve a target vertical travel under load, actuated by a hydraulic cylinder selected from a discrete catalogue of standard stroke sizes.
 
-To generalize, we will move towards a **Four-Bar Linkage** model:
-- **$L_{lower}$**: Length of the lower arm.
-- **$L_{upper}$**: Length of the upper arm.
-- **$H_{frame}$**: Vertical distance between fixed pivots on the frame.
-- **$H_{effector}$**: Vertical distance between pivots on the moving end-link.
-- **$\Delta X_{frame}$**: Horizontal offset between frame pivots (allowing non-vertical frame mounting).
+The system has ~11 coupled parameters (arm lengths, frame heights, frame offset, topology, lug positions, stroke selection) and multiple hard physical constraints (cylinder spec window, mechanical clearance) plus soft preferences (force margin, parallelism, stroke preference). The fitness landscape is therefore highly multimodal, with large infeasible regions and narrow corridors of viable geometry.
 
-### 1.2. Mathematical Model: Four-Bar Position Analysis
-To support modified parallelograms, we use the standard four-bar linkage equations. Given the lower arm angle $\theta$:
-1.  **Lower End Pivot ($P_3$):** $(L_L \cos \theta, L_L \sin \theta)$.
-2.  **Upper End Pivot ($P_4$):** Must satisfy $|P_4 - P_3| = H_e$, where $P_4 = (x_f + L_U \cos \phi, y_f + L_U \sin \phi)$.
-3.  **End-Link Angle ($\psi$):** $\operatorname{atan2}(y_4 - y_3, x_4 - x_3)$.
+## 2. Coordinate Convention: Endpoint-Local Lugs
 
-### 1.3. Lug Coordinate Systems
-Lugs are defined in local "member-space" $(u, v)$ where $u$ is along the member's longitudinal axis and $v$ is perpendicular:
--   **Arm Lugs:** Origin at frame pivot, $u$-axis pointing towards the end-effector pivot.
--   **Frame Lugs:** Fixed global coordinates $(x, y)$.
--   **End-Link Lugs:** Origin at $P_3$, $u$-axis pointing towards $P_4$.
+### The decision
+Arm-mounted cylinder lugs ('L' for lower arm, 'U' for upper arm) use an **endpoint-local** coordinate system:
+- **Origin** at the arm's effector-side endpoint (P3 for lower, P4 for upper)
+- **u** = distance back along the arm toward the frame pivot
+- **v** = perpendicular offset from the arm centreline
 
-### 1.4. Actuator Mounting Arrangements
-The solver should support multiple "topologies":
-1.  **Diagonal (Current):** Lower Arm to Upper Arm.
-2.  **Frame to Arm:** Frame (fixed point) to either Lower or Upper Arm.
-3.  **Crossed:** Lower Arm to Frame, or Frame to Upper Arm in a way that crosses the other arm.
-4.  **Indirect:** Using a bell crank (likely out of scope for phase 1).
+### Why
+The lug's mechanical purpose is to push/pull near the end of the arm where it has the most leverage. Parameterising from the endpoint means `u` directly represents "how far back from the tip" — a quantity with clear physical meaning. It also makes the symmetry constraint (section 3) natural to express.
 
-## 2. Genetic Algorithm Approach
+The implementation negates `u` in `get_lug_pos` because the arm's angle vector points from frame pivot toward endpoint, so walking "back along the arm" is the negative direction: `get_lug_pos(endpoint, angle, -u, v)`.
 
-### 2.1. The Genome (Solution Space)
-A individual solution will be represented by a vector of parameters:
-- **Geometry:** $L_L, L_U, H_f, H_e, \Delta X_f$.
-- **Mounting:** $TopologyID, Lug1_{member}, Lug1_{u}, Lug1_{v}, Lug2_{member}, Lug2_{u}, Lug2_{v}$.
-- **Cylinder:** $StrokeID$ (from a catalog of standard cylinders).
+### What went wrong before
+The original system used frame-pivot-origin coordinates. This made the symmetry mapping confusing and led to a bug where both lugs ended up at the same end of the parallelogram, producing a short cylinder that intersected both arms.
 
-### 2.2. Fitness Functions & Weights
-We want to optimize for:
-1.  **Capacity Margin (High Weight):** Maximize $F_{capacity} - F_{required}$ across the whole stroke.
-2.  **Stroke Utilization (Medium Weight):** Minimize "wasted" cylinder stroke (percentage of $S$ used).
-3.  **Mechanical Ratio Linearity (Low Weight):** Prefer linkages where the force requirement is relatively flat.
-4.  **Compactness (Low Weight):** Penalize excessively long arms or lugs.
-5.  **Clearance (Hard Constraint/Penalty):** Heavy penalty for any intersection between cylinder and arms.
-6.  **Parallelism (User Preference):** For applications requiring the load to stay level, penalize $|H_{frame} - H_{effector}|$ and $|L_{upper} - L_{lower}|$.
+## 3. LU Symmetry: 180-Degree Rotation
 
-## 4. Using the Tool
-
-### 4.1. Installation
-Ensure you have the required dependencies:
-```bash
-pip install pygad streamlit numpy matplotlib scipy
+### The decision
+For the diagonal (Lower-to-Upper) topology with symmetrical lugs enabled, the second lug is derived from the first by the 180° rotational symmetry of the parallelogram:
+```
+u2 = (1 - frac) * L_U    (complementary position)
+v2 = -v1                  (opposite perpendicular offset)
 ```
 
-### 4.2. Running the Optimizer
-Start the Streamlit dashboard:
-```bash
-streamlit run app.py
+### Why
+A true parallelogram has 180° rotational symmetry about its centre. This symmetry maps diagonal corners: P3↔P2 and P1↔P4. If lug1 is at fraction `frac` from P3, the symmetric lug2 must be at fraction `frac` from P2 — which is `(1 - frac)` from P4 in our endpoint-local convention. The perpendicular offset flips sign because the rotation reverses the normal direction.
+
+This constraint halves the lug search space (4 free parameters → 2) and guarantees a diagonal actuator arrangement, which is the most common configuration for parallelogram lifts.
+
+### What went wrong before
+An early implementation used `u2 = frac * L_U` (same fraction from the same end), which placed both lugs near the effector endpoints. This produced a short, near-horizontal cylinder that couldn't generate useful travel and violated clearance constraints everywhere.
+
+## 4. Fitness Landscape Design
+
+The central challenge of this GA is that most of the parameter space produces physically impossible or useless linkages. The fitness function must simultaneously:
+1. Kill obviously infeasible solutions (hard constraints)
+2. Provide smooth gradient toward feasible regions (soft modifiers)
+3. Not create flat plateaus where the GA has no signal to follow
+
+### 4.1. Hard Constraints (Death Penalties)
+
+These return `0.0001` immediately — the genome does not survive:
+
+- **Impossible geometry**: arm too short to achieve target travel (`sin(theta_start)` outside [-1, 1])
+- **Kinematic failure**: `analyze_range` throws an exception (no valid positions exist)
+- **Clearance violation**: cylinder mid-span passes within `(arm_width/2 + cyl_envelope/2)` of either arm centreline
+
+Death penalties are appropriate here because these represent physical impossibilities. There is no "almost clears" — either the cylinder fits between the arms or it doesn't. Giving gradient to near-misses would waste GA effort exploring geometries that can never be built.
+
+### 4.2. The Rubber Wall (Cylinder Spec)
+
+```python
+over_ext = max(0, l_max - max_spec)
+over_ret = max(0, min_spec - l_min)
+wall_mod = exp(-0.01 * (over_ext² + over_ret²))
 ```
 
-### 4.3. Workflow
-1.  **Define Targets:** Enter the desired travel (mm) and the load (kg) in the sidebar.
-2.  **Evolve:** Set the number of generations and click "Run Optimizer".
-3.  **Compare:** Review the top 5 distinct solutions found by the GA. Click on the solution buttons to view their geometry and force profiles.
-4.  **Refine:** Manually adjust any parameters (lengths, lug positions) in the "Details" section to see how it affects the mechanical performance in real-time.
+This replaced an earlier death penalty for cylinder spec violations. The exponential decay provides:
+- **No penalty** when fully within spec (`wall_mod = 1.0`)
+- **Gentle nudge** for small violations: 5mm over → `wall_mod ≈ 0.78`
+- **Strong suppression** for large violations: 20mm → `0.018`, 30mm → `0.0001`
+
+#### Why not a death penalty?
+The cylinder spec window is a narrow target. With a death penalty, the GA had to randomly stumble into geometries where the cylinder range happened to land inside the spec — a needle-in-haystack search with no gradient. The rubber wall lets solutions that are *close* to spec survive and breed, converging the population toward the boundary from outside.
+
+The tradeoff is that returned solutions can be slightly out of spec (up to ~30mm before fitness drops to death-penalty levels). This is acceptable because the user sees the spec status in the UI metrics and can manually adjust. The GA's job is to find the *region*, not the exact point.
+
+#### Why quadratic exponent?
+The squared term `over²` makes the penalty accelerate — gentle near the boundary, savage further out. A linear exponent (`exp(-k * over)`) would decay too uniformly, not distinguishing between "1mm over" and "15mm over" strongly enough.
+
+### 4.3. Soft Modifiers
+
+Each modifier is a `[0, 1]` multiplier on the base fitness, using smooth hyperbolic or exponential decay. They are multiplicative so that any single bad property can suppress fitness, but a solution that's good on all axes gets their combined benefit.
+
+| Modifier | Formula | Purpose |
+|---|---|---|
+| `travel_fit` | `2000 / (1 + max(0, \|error\| - 50))` | Base score. ±50mm dead zone so near-hits aren't penalised. |
+| `kin_mod` | `valid_fraction` | Fraction of the sweep with valid kinematics. Prefers robust geometry. |
+| `force_mod` | `1 / (1 + excess/2)` | Penalises peak force exceeding cylinder capacity. |
+| `ratio_mod` | `1 / (1 + max(0, ratio-8)*2)` | Penalises extreme mechanical ratios (>8:1). |
+| `parallel_mod` | `1 / (1 + (\|ΔL\| + \|ΔH\|) / 200)` | Prefers true parallelograms. |
+| `stroke_mod` | `0.3^(\|idx_distance\|)` | Optional. Exponential preference for a nominated cylinder stroke. |
+| `wall_mod` | `exp(-0.01 * over²)` | Rubber wall for cylinder spec (see above). |
+
+#### Why `1/(1 + x)` not `exp(-x)`?
+The hyperbolic form has a long tail — it never fully kills a solution, just progressively discounts it. This is important because these are *preferences*, not physical constraints. A solution with a 10:1 mechanical ratio is bad but not impossible. The GA should deprioritise it, not eliminate it.
+
+#### Why multiplicative composition?
+Additive fitness (weighted sum) allows a solution to compensate for a terrible property by being excellent on another. Multiplicative composition means every modifier must be reasonable — you can't offset bad clearance with great travel. This matches the engineering reality: a linkage that achieves perfect travel but exceeds cylinder capacity is useless.
+
+### 4.4. What failed before (cliff penalties)
+The original fitness function used large additive penalties (5000x, 100000x multipliers) subtracted from a ~2000 base score. This created a landscape where virtually every solution scored `0.0001` (the floor), because even a single moderate penalty exceeded the base fitness by orders of magnitude. The GA had no gradient — every bad solution looked identical. Replacing these with smooth `[0, 1]` multipliers immediately produced useful convergence.
+
+## 5. Dynamic Kinematic Sweep
+
+### The decision
+Instead of evaluating the linkage over a fixed angular range (-45° to 45°), the sweep is computed dynamically:
+```python
+theta_end = 20°  (typical transit height)
+theta_start = arcsin(sin(20°) - target_travel / L_L)
+```
+
+### Why
+The fixed range was arbitrary and disconnected from the actual design target. A linkage with short arms evaluated over -45° to 45° would show huge travel that was irrelevant to the 1000mm target. A linkage with long arms might show insufficient travel over the same range because the interesting region was elsewhere.
+
+The dynamic sweep ensures the GA evaluates exactly the range that would produce the target travel for the given arm length. This makes the travel fitness modifier essentially a measure of "does this geometry *work* over this range" rather than "does this geometry *happen to produce the right number* over an arbitrary range." It dramatically improves convergence because the GA no longer wastes effort optimising for the wrong sweep.
+
+## 6. Clearance: Pin Inset
+
+### The decision
+Before checking cylinder-to-arm clearance, the cylinder segment is inset by 10% from both ends:
+```python
+Q_vec = Q2 - Q1
+Q1_safe = Q1 + (Q_vec * 0.1)
+Q2_safe = Q2 - (Q_vec * 0.1)
+```
+
+### Why
+The cylinder is physically mounted to the arms at the lug points. At those exact locations, the cylinder and arm are necessarily in contact (that's where the pin goes). Checking clearance at the mounting pins always reports zero distance, triggering the death penalty for every possible geometry.
+
+By insetting the check segment, we test the mid-span of the cylinder where actual collisions would occur — the body of the cylinder passing through an arm it shouldn't intersect. 10% was chosen as a conservative margin that excludes the pin region without ignoring too much of the cylinder length.
+
+## 7. GA Parameter Choices
+
+### 7.1. Blend Crossover
+
+```python
+alpha = uniform(0.25, 0.75)
+offspring = round(alpha * parent_a + (1-alpha) * parent_b)
+```
+
+#### Why not single-point crossover?
+Single-point crossover splits the genome at a random position and swaps tails. For our genome `[L_L, L_U, H_f, H_e, dx_f, topo, l1u, l1v, l2u, l2v, stroke]`, the parameters are tightly coupled — lug positions are only meaningful relative to arm lengths, and stroke selection depends on the overall geometry. Splitting at position 4 takes geometry from one parent and lug positions from another, producing offspring that are almost certainly worse than either parent.
+
+#### Why not uniform crossover?
+Uniform crossover independently selects each gene from either parent. While better than single-point (no arbitrary split), it still produces combinations where `L_L` comes from parent A but `l1u` (which is a fraction of `L_L`) comes from parent B. The resulting lug position is nonsensical for the inherited arm length.
+
+#### Why blend/arithmetic crossover?
+Averaging (with random weight) preserves the correlated structure of the genome. If parent A has `(L_L=800, l1u=200)` (25% lug position) and parent B has `(L_L=1200, l1u=300)` (25% lug position), their blend produces `(L_L≈1000, l1u≈250)` — still a 25% lug position. The proportional relationships survive crossover.
+
+The random alpha in [0.25, 0.75] rather than fixed 0.5 maintains population diversity. A fixed average would collapse the population to a single centroid; the variable weight lets offspring spread across the region between parents.
+
+### 7.2. Adaptive Mutation [15, 5]
+
+- **Low-fitness solutions**: mutate 15% of genes (~2 of 11). These solutions are far from any optimum and need significant perturbation to explore.
+- **High-fitness solutions**: mutate 5% of genes (~1 of 11). These are near an optimum and need gentle refinement, not demolition.
+
+#### Why not fixed 20%?
+With 11 genes, 20% mutation means ~2 genes are randomly altered every generation. For a solution that's converging toward an optimum (`L_L=1043, H_f=475`), randomly perturbing 2 genes by replacement would frequently produce offspring that are dramatically worse. This is anti-productive — we want the GA to *refine*, not *thrash*.
+
+#### Why `mutation_by_replacement=False`?
+With replacement enabled (the default), a mutated gene gets a completely new random value drawn uniformly from its gene space. For `L_L` with range [400, 1500], a solution at `L_L=1043` could jump to `L_L=400` in a single mutation — a 60% change that almost certainly destroys fitness.
+
+With replacement disabled, mutation is *additive* — a small random value is added to the existing gene. This produces local perturbation: `L_L=1043` might become `L_L=1060` or `L_L=1025`. This is the correct behaviour for continuous optimisation of physical parameters.
+
+### 7.3. Elitism and Selection
+
+- **`keep_elitism=10`**: The top 10 solutions are preserved across generations, ensuring the best-known geometry is never lost to crossover or mutation.
+- **`keep_parents=0`**: Parents are not preserved with stale fitness values. Without this, PyGAD can carry forward solutions evaluated under different conditions (e.g., before a constraint was added) with outdated fitness scores.
+- **`parent_selection_type="sss"`** (steady-state): Combined with elitism, this provides strong selection pressure while the blend crossover and adaptive mutation handle exploration.
+- **Post-hoc re-evaluation**: Before returning results, every candidate is freshly evaluated. This catches any solutions that survived with stale fitness from elitism or other PyGAD internals.
+
+### 7.4. Population and Mating
+
+- **`sol_per_pop=200`**: Large enough to cover the search space initially. With 11 genes and wide ranges, 200 individuals provides reasonable coverage without excessive evaluation cost.
+- **`num_parents_mating=25`**: ~12% of the population breeds each generation. This is moderate — enough parents to maintain diversity, few enough to maintain selection pressure.
+
+## 8. Cylinder Catalogue
+
+Standard hydraulic cylinder strokes: `[8, 10, 12, 16, 18, 24, 36, 48]` inches.
+
+For a given stroke `S`:
+- **Minimum length** (fully retracted): `(12.25 + S) * 25.4 mm`
+- **Maximum length** (fully extended): `min_length + S * 25.4 mm`
+
+The 12.25-inch base accounts for the piston rod, seals, and end caps. This is an industry-standard approximation for tie-rod cylinders.
+
+### Stroke Preference
+
+When enabled, an exponential decay `0.3^|distance|` penalises solutions that select strokes far from the user's preferred size. One step away (e.g., preferring 12" but getting 16") reduces fitness to 30%. Two steps away reduces to 9%. This strongly converges the GA toward the preferred stroke while still allowing it to explore adjacent sizes if the geometry demands it.
+
+The preference is optional — disabling it lets the GA find the globally optimal stroke size regardless of user preference.
