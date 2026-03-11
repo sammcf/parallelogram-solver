@@ -22,7 +22,7 @@ st.markdown(
     h1, h2, h3 { font-family: 'DM Sans', sans-serif !important; font-weight: 600 !important; }
 
     /* Tighten main header */
-    .block-container { padding-top: 1.5rem !important; }
+    .block-container { padding-top: 2.5rem !important; }
     h1 { font-size: 1.4rem !important; margin-bottom: 0.25rem !important; letter-spacing: -0.02em; }
 
     /* Sidebar section labels — smaller, uppercase, spaced */
@@ -68,7 +68,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.markdown("# Linkage Solver")
+st.markdown("### Linkage Solver")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -234,14 +234,18 @@ with st.sidebar:
                 use_clearance,
                 preferred_stroke_idx,
             )
-            st.session_state.top_solutions = opt.run(gens=generations)
+            main, deviants = opt.run(gens=generations)
+            st.session_state.top_solutions = main
+            st.session_state.deviant_solutions = deviants
 
 
 # ── GA Results ────────────────────────────────────────────────────────────────
-def _apply_solution(i):
+def _apply_solution(i, deviant=False):
     """Push GA solution values into all config widget session state keys."""
     st.session_state.selected_idx = i
-    sol = st.session_state.top_solutions[i][0]
+    st.session_state.selected_deviant = deviant
+    source = st.session_state.deviant_solutions if deviant else st.session_state.top_solutions
+    sol = source[i][0]
     topo = int(sol[6])
     pairs = {
         "cfg_LL": int(sol[0]),
@@ -277,15 +281,14 @@ def _apply_solution(i):
 
 
 if "top_solutions" in st.session_state:
-    st.markdown("## Solutions")
+    st.markdown("##### Solutions")
     if not st.session_state.top_solutions:
         st.warning("No feasible solutions. Relax constraints or increase generations.")
     else:
+        _ev = FitnessEvaluator(target_travel, load_kg, cyl_params)
         cols_top = st.columns(len(st.session_state.top_solutions))
         for i, (sol, fit) in enumerate(st.session_state.top_solutions):
-            _, _, _, _, _, _, _, _, s_idx = FitnessEvaluator(
-                target_travel, load_kg, cyl_params
-            ).decode_genome(sol)
+            _, _, _, _, _, _, _, _, s_idx = _ev.decode_genome(sol)
             stroke_in = CylinderCatalogue.STROKES_IN[s_idx]
             cols_top[i].button(
                 f"#{i + 1}  fit {int(fit)}  {stroke_in}in",
@@ -294,18 +297,39 @@ if "top_solutions" in st.session_state:
                 on_click=_apply_solution,
                 args=(i,),
             )
+        devs = st.session_state.get("deviant_solutions", [])
+        if devs:
+            st.markdown("##### Divergent")
+            cols_dev = st.columns(len(devs))
+            for i, (sol, fit) in enumerate(devs):
+                _, _, _, _, _, _, _, _, s_idx = _ev.decode_genome(sol)
+                stroke_in = CylinderCatalogue.STROKES_IN[s_idx]
+                cols_dev[i].button(
+                    f"#{i + 1}  fit {int(fit)}  {stroke_in}in",
+                    key=f"dev_{i}",
+                    use_container_width=True,
+                    on_click=_apply_solution,
+                    args=(i, True),
+                )
 
 # ── Linkage Configuration ─────────────────────────────────────────────────────
-st.markdown("## Configuration")
+st.markdown("#### Configuration")
 
 
 def _ga_sol():
-    if "top_solutions" not in st.session_state or not st.session_state.top_solutions:
+    deviant = st.session_state.get("selected_deviant", False)
+    if deviant:
+        source = st.session_state.get("deviant_solutions", [])
+    else:
+        source = st.session_state.get("top_solutions", [])
+    if not source:
+        source = st.session_state.get("top_solutions", [])
+    if not source:
         return None
     idx = st.session_state.get("selected_idx", 0)
-    if idx >= len(st.session_state.top_solutions):
+    if idx >= len(source):
         idx = 0
-    return st.session_state.top_solutions[idx][0]
+    return source[idx][0]
 
 
 sol = _ga_sol()
@@ -379,7 +403,7 @@ with c4:
     )
 
 # ── Lug positions ─────────────────────────────────────────────────────────────
-st.markdown("### Lugs")
+st.markdown("##### Lugs")
 cols2 = st.columns(4)
 is_sym = topo == 0 and symmetrical_lugs
 
@@ -393,9 +417,9 @@ if topo == 0:
     if is_sym:
         u1, v1, u2, v2 = u_pct * L_L, v_val, (1 - u_pct) * L_U, -v_val
         with cols2[2]:
-            st.markdown(f"**Lug2 U** {(1 - u_pct) * 100:.0f}%")
+            dual_input("Lug2 U %", 0, 100, round((1 - u_pct) * 100), "l2u")
         with cols2[3]:
-            st.markdown(f"**Lug2 V** {-v_val} mm")
+            dual_input("Lug2 V (mm)", -300, 300, -v_val, "l2v")
     else:
         default_u2 = int(sol[9] / 10) if sol is not None else 80
         default_v2 = int(((sol[10] / 1000.0) * 600) - 300) if sol is not None else -150

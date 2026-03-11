@@ -133,6 +133,67 @@ class GAOptimizer:
             offspring[k] = np.round(alpha * parents[i] + (1 - alpha) * parents[j]).astype(int)
         return offspring
 
+    def _extract_unique(self, population, fitness, n=5, min_dist=150):
+        """Top-n unique solutions with fresh fitness re-evaluation."""
+        sorted_idx = np.argsort(fitness)[::-1]
+        unique, seen = [], []
+        for idx in sorted_idx:
+            sol = population[idx]
+            fresh_fit = self.evaluator.evaluate(sol)
+            if fresh_fit <= 0.0001:
+                continue
+            if not any(np.linalg.norm(sol - s) < min_dist for s in seen):
+                unique.append((sol, fresh_fit))
+                seen.append(sol)
+            if len(unique) >= n:
+                break
+        return unique
+
+    @staticmethod
+    def _select_diverse(pop, fitness, n=5, ref_solutions=None, min_dist=200):
+        """Greedy max-min-distance selection from the top half by fitness,
+        excluding anything too close to ref_solutions."""
+        sorted_idx = np.argsort(fitness)[::-1]
+        candidates = list(pop[sorted_idx[:max(1, len(sorted_idx) // 2)]])
+
+        if ref_solutions:
+            candidates = [c for c in candidates
+                          if all(np.linalg.norm(c - r) >= min_dist for r in ref_solutions)]
+
+        if not candidates:
+            return []
+
+        selected = [candidates.pop(0)]
+        for _ in range(n - 1):
+            if not candidates:
+                break
+            dists = np.array([min(np.linalg.norm(c - s) for s in selected)
+                              for c in candidates])
+            best = int(np.argmax(dists))
+            if dists[best] < min_dist:
+                break
+            selected.append(candidates.pop(best))
+        return selected
+
+    @staticmethod
+    def _make_colony(seed, gene_space, n=40):
+        """Seed + gaussian mutations respecting gene bounds."""
+        colony = [seed.copy()]
+        for _ in range(n - 1):
+            mutant = seed.copy()
+            for i in range(len(mutant)):
+                if np.random.random() < 0.3:
+                    space = gene_space[i]
+                    if isinstance(space, dict):
+                        lo, hi = space['low'], space['high']
+                        spread = (hi - lo) * 0.15
+                        mutant[i] = int(np.clip(
+                            mutant[i] + np.random.normal(0, spread), lo, hi))
+                    elif isinstance(space, list):
+                        mutant[i] = int(np.random.choice(space))
+            colony.append(mutant)
+        return np.array(colony)
+
     def run(self, gens=100):
         gene_space = [{'low': 400, 'high': 1500}, {'low': 400, 'high': 1500}, {'low': 200, 'high': 600}, {'low': 200, 'high': 600},
                       {'low': -200, 'high': 200}, {'low': -200, 'high': 200}, self.allowed_topos, {'low': 0, 'high': 1000}, {'low': 0, 'high': 1000},
@@ -140,6 +201,15 @@ class GAOptimizer:
         param_map = ['L_L', 'L_U', 'H_f', 'H_e', 'dx_f', 'dy_f', 'topo', 'l1u_pct', 'l1v_pct', 'l2u_pct', 'l2v_pct', 'stroke_idx']
         for i, name in enumerate(param_map):
             if name in self.fixed_params: gene_space[i] = [int(self.fixed_params[name])]
+
+        # Snapshot early population for deviant cultivation
+        snapshot = {}
+        snapshot_gen = max(1, gens // 5)
+
+        def _on_gen(ga_inst):
+            if ga_inst.generations_completed == snapshot_gen:
+                snapshot['pop'] = ga_inst.population.copy()
+                snapshot['fit'] = ga_inst.last_generation_fitness.copy()
 
         ga = pygad.GA(
             num_generations=gens,
@@ -156,19 +226,46 @@ class GAOptimizer:
             mutation_percent_genes=[15, 5],
             mutation_by_replacement=False,
             gene_type=int,
+            on_generation=_on_gen,
         )
         ga.run()
 
-        sorted_idx = np.argsort(ga.last_generation_fitness)[::-1]
-        unique, seen = [], []
-        for idx in sorted_idx:
-            sol = ga.population[idx]
-            # Re-evaluate to catch any stale fitness values
-            fresh_fit = self.evaluator.evaluate(sol)
-            if fresh_fit <= 0.0001:
-                continue
-            if not any(np.linalg.norm(sol - s) < 150 for s in seen):
-                unique.append((sol, fresh_fit))
-                seen.append(sol)
-            if len(unique) >= 5: break
-        return unique
+        main_top = self._extract_unique(ga.population, ga.last_generation_fitness)
+
+        # Cultivate deviants: seed small independent GAs from diverse early individuals
+        deviant_top = []
+        if snapshot and main_top:
+            ref = [s for s, _ in main_top]
+            deviants = self._select_diverse(
+                snapshot['pop'], snapshot['fit'], n=5, ref_solutions=ref)
+
+            cult_gens = max(10, gens // 2)
+            for dev in deviants:
+                colony = self._make_colony(dev, gene_space, n=40)
+                mini = pygad.GA(
+                    num_generations=cult_gens,
+                    num_parents_mating=10,
+                    fitness_func=self.fitness_func,
+                    initial_population=colony,
+                    gene_space=gene_space,
+                    parent_selection_type="sss",
+                    keep_parents=0,
+                    keep_elitism=3,
+                    crossover_type=self.blend_crossover,
+                    mutation_type="adaptive",
+                    mutation_percent_genes=[15, 5],
+                    mutation_by_replacement=False,
+                    gene_type=int,
+                )
+                mini.run()
+                best = self._extract_unique(
+                    mini.population, mini.last_generation_fitness, n=1)
+                if best:
+                    deviant_top.append(best[0])
+
+            # Drop any that reconverged to the main solutions
+            deviant_top = [
+                (s, f) for s, f in deviant_top
+                if all(np.linalg.norm(s - ms) >= 150 for ms, _ in main_top)]
+
+        return main_top, deviant_top
